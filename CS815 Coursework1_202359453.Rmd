@@ -1,0 +1,784 @@
+---
+title: "CS815 Assignment - Portfolio Optimisation using GAs"
+author: "Linu Roby"
+date: "2024-02-25"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+---
+#                         PORTFOLIO OPTIMISATION USING GA
+#                                    PART 1 
+The aim is to create a portfolio of stocks and to find the optimal solution using Genetic algorithm. 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(repos = c(CRAN = "https://cran.rstudio.com"))
+# Install the required packages if not already installed
+if (!require("tidyr", character.only = TRUE)) {
+  install.packages("tidyr")
+}
+library(tidyr)
+if (!require("quantmod", character.only = TRUE)) {
+  install.packages("quantmod")
+}
+library(quantmod)
+if (!require("PortfolioAnalytics", character.only = TRUE)) {
+  install.packages("PortfolioAnalytics")
+}
+library(PortfolioAnalytics)
+if (!require("GA", character.only = TRUE)) {
+  install.packages("GA")
+}
+library(GA)
+library(ggplot2)
+if (!require("corrplot", character.only = TRUE)) {
+  install.packages("corrplot")
+}
+library(corrplot)
+```
+## Construction of a portfolio using the GA package
+### Selection of stocks
+For this part, I have chosen 10 different stocks from different sectors of the economy. The assets chosen have performed well during the year 2018. The stocks are chosen from different sectors and industries to include diversification. By this selection, we are trying to mitigate some risk of impact of poor performance in a specific industry. This selection and diversification also aim to reduce the overall correlation within the portfolio. The selected stocks are as below.  
+ABMD - Abiomed, Inc.(Medical device technology company)
+AMD - Advanced Micro Devices, Inc.(Semiconductor company)
+TRIP - TripAdvisor, Inc.(Company that operates online travel agencies)
+CMG - Chipotle Mexican Grill, Inc. (Restaurant chain)
+NFLX - Netflix, Inc. (Video streaming company)
+UA - Under Armour, Inc.(Sportswear company)
+AMZN - Amazon.com, Inc.(Ecommerce and AI)
+BSX - Boston Scientific. (Multinational manufacturer of medical devices)
+FTNT - Fortinet. (Cybersecurity company)
+ORLY - O'Reilly Automotive Inc. American auto parts retailer
+```{r echo=FALSE, results='hide'}
+myStocks <- c("ABMD","AMD","TRIP","CMG","NFLX","UA","AMZN","BSX","FTNT","ORLY")
+myStocks
+```
+### Data retrieval
+The date range chosen is 1 year from 1st Jan 2018 to 31st Dec 2018. The quantmod package is used to retrieve the stock details. The source of retrieval is yahoo finance.
+```{r echo=FALSE, results='hide',cache=FALSE}
+# retrieve the data from yahoo finance for the period specified
+getSymbols(myStocks,src="yahoo",from="2018-01-01", to="2018-12-31")
+# view the first 5 rows
+head(ORLY,5)
+```
+```{r echo=FALSE, results='hide'}
+# View the structure of any stock
+str(NFLX)
+```
+### Daily returns for all stocks:
+The daily return for each stock is calculated and merged into a single data frame.
+```{r echo=FALSE, results='hide',cache=FALSE}
+# merge the daily returns of all stocks into a single dataframe
+dailyReturns <- data.frame(merge(dailyReturn(ABMD), dailyReturn(AMD), 
+                              dailyReturn(TRIP),dailyReturn(CMG), dailyReturn(NFLX),
+                              dailyReturn(UA),dailyReturn(AMZN), dailyReturn(BSX), 
+                              dailyReturn(FTNT),dailyReturn(ORLY)))
+# replace the column names with the stock names
+colnames(dailyReturns) <- myStocks
+head(dailyReturns,10) 
+tail(dailyReturns,10)
+```
+```{r echo=FALSE, fig.width=5, fig.height=3, fig.align='center',cache=FALSE}
+# plot the daily returns
+chartSeries(dailyReturns)
+```
+### Visualise the data
+
+A heat map chart is generated to visualize the correlation among the stocks selected. It is very clear that there is weak correlation. This might be due to the diverse nature if stocks selected from diverse industries.
+```{r echo=FALSE,fig.width=5, fig.height=2, fig.align='center'}
+# plot correlation heatmap
+corrplot::corrplot(cor(dailyReturns),method = 'color',tl.cex = 0.4)
+```
+### Fitness function:
+Create the evaluation function which will maximize the weighted mean returns and at the same time minimizing the risk. The mean value of daily returns from the stocks is calculated. The risk associated with holding a particular combination of stocks is represented by the standard deviation of the portfolio. The risk is calculated using the weights vector and the covariance vector and gives an indication on the portfolio variance. The fitness function calculates the portfolio score and aims to maximize this score for better performance. This effectively denotes, the mean return is maximized and the risk is minimized.
+```{r echo=FALSE, results='hide',cache=FALSE}
+# find the mean of daily returns using apply function
+meanreturn <- apply(dailyReturns,2,mean)
+meanreturn
+# Weights are initially assigned to each stock while maintaining the total weight as 1.
+weights = c(0.2,0.1,0.03,0.07,0.02,0.04,0.4,0.06,0.04,0.04)
+# Sum of weights is 1
+sum(weights)
+# Weighted return
+weight_returns <- sum(weights*meanreturn)
+weight_returns
+# Use cov function to get the covariance of daily returns which is the risk.
+cov_mystocks = cov(dailyReturns)
+cov_mystocks
+portfolio_risk <- sqrt(t(weights) %*% (cov_mystocks %*% weights))
+portfolio_risk
+```
+```{r echo=FALSE, results='hide',cache=FALSE}
+# fitness function to get best weights with maximum portfolio score
+evalFunc <- function(weights) {  
+  weights <- weights / sum(weights)
+  sum_weights = sum(weights)
+  # Add a constraint to check if sum of weights is 1. Return high penalty if sum doesnot add to 1
+  if (abs(sum_weights - 1) > 1e-6) {
+    return(-Inf)
+  }
+  # portfolio returns is the sum of weighted mean returns
+  portfolio_returns <- sum(weights*meanreturn)
+  # risk is calculated in terms of covariance
+  portfolio_risk <- sqrt(t(weights) %*% (cov_mystocks %*% weights))
+  # Portfolio score will maximize mean return and minimize covariance
+  portfolio_score <- (portfolio_returns / portfolio_risk)
+  
+  return(portfolio_score)
+}
+```
+### GA package:
+Run the GA model with adequate parameters. The parameters are adjusted to get a stable output. A population size of 200 is chosen for each generation of the algorithm. Maximum iterations of 1000 will be performed. The number of iterations are increased to attain the stability of the plot. Crossover and mutation values are given which indicates 60% of the offspring will result from crossover and 4% of population will undergo mutation.As weights range from 0 to 1, the lower and upper are kept as 0 and 1 respectively. These parameters are adjusted to get the optimal weights.
+As seen from the plot, the convergence starts from around 400-600 iterations. The number of iterations is hence kept as 1000 to avoid excessive run time.
+```{r warning=FALSE,echo=FALSE,results = 'hide',cache=FALSE}
+num_stocks <- 10
+# Define the parameters to be passed to GA
+GA_params <- list(
+  populationSize = 200,
+  maxiter = 1000,
+  pcrossover = 0.6,
+  pmutation = 0.04,
+  lower = rep(0,num_stocks),
+  upper = rep(1,num_stocks)
+)
+# run the GA model
+GA_model <- ga(type = "real-valued", fitness = evalFunc, lower = GA_params$lower, upper = GA_params$upper, monitor = FALSE, popSize = GA_params$populationSize, maxiter = GA_params$maxiter, pcrossover = GA_params$pcrossover, pmutation = GA_params$pmutation)
+```
+### GA Solution and plot
+The optimal weights are obtained from GA and plotted. The weights for each stock is displayed. The plot displays GA model converging to the best value and getting stable.
+```{r echo=FALSE, results='hide',,cache=FALSE}
+# assign the column names for solution from the stock names
+colnames(GA_model@solution) <- myStocks
+GA_model@solution
+# view the returns with the optimal weights
+sum(meanreturn*GA_model@solution)
+```
+```{r echo=FALSE, results='hide',cache=FALSE}
+optimal_weights <- as.numeric(GA_model@solution)
+# view the optimal weights
+optimal_weights
+```
+```{r, echo=FALSE, fig.width=4, fig.height=4, fig.align='center'}
+# plot the model to see the convergence trend
+plot(GA_model)
+```
+```{r include=FALSE}
+weights_plot <- data.frame(Stocks = myStocks,stockWeight = optimal_weights)
+# Use ggplot for plotting the weights assigned to each stock
+ggplot(weights_plot, aes(x = reorder(Stocks, -stockWeight), y = stockWeight)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.7) +
+  coord_flip() +
+  labs(title = "Optimal Weights of Assets",
+       x = "Stocks",
+       y = "stockWeight") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+```
+```{r echo=FALSE,cache=FALSE}
+# The weights from GA is applied to the stocks and the returns is calculated for the portfolio
+optimised_returns_GA <- sum(meanreturn*optimal_weights)
+# find risk using covariance
+optimised_risk_GA <- sqrt(t(optimal_weights) %*% (cov_mystocks %*% optimal_weights))
+# calculate score from returns and risk
+optimised_score <- optimised_returns_GA / optimised_risk_GA
+# create dataframe to store the optimal weights and stocks
+optimisedportfolio_df <- data.frame(
+  Stocks = myStocks,
+  OptimalWeights = optimal_weights)
+optimisedportfolio_df
+```
+```{r echo=FALSE,cache=FALSE}
+# create dataframe to view returns, risk and score with the optimal weights
+optimisedreturns_df <- data.frame(
+  Returns = optimised_returns_GA,
+  Risk = optimised_risk_GA,
+  PortfolioScore = optimised_score)
+# print the metrics after optimizing weights
+message <- "Optimized Returns, Risk and Score derived from GA model:"
+cat(paste(message, "\n", toString(optimisedreturns_df), "\n"))
+```
+## Evaluation of the portfolio on unseen "future" data
+In order to evaluate the model and optimal weights, the weights optimized from GA model is applied to the test data of year 2019. The portfolio returns,risk and score of unseen data from 2019 is generated by utilizing these optimal weights. The returns for the training data is significantly higher than the returns from testing data.
+```{r echo=FALSE, results='hide',cache=FALSE}
+# get data from yahoo for the specified test period
+getSymbols(myStocks, src = "yahoo", from = "2019-01-01", to = "2019-12-31")
+# Get the daily returns for the test period and merge into a data frame
+dailyReturns_future <- data.frame(merge(dailyReturn(ABMD), dailyReturn(AMD), 
+                              dailyReturn(TRIP),dailyReturn(CMG), dailyReturn(NFLX),
+                              dailyReturn(UA),dailyReturn(AMZN), dailyReturn(BSX), 
+                              dailyReturn(FTNT),dailyReturn(ORLY)))
+# replace column names with the stock names
+colnames(dailyReturns_future) <- myStocks
+head(dailyReturns_future,2)
+optimal_weights
+# calculate mean returns for test data by using apply function
+mean_return_future <- apply(dailyReturns_future,2,mean)
+mean_return_future
+# find the covariance of daily returns of test data
+cov_mystocks_future <- cov(dailyReturns_future)
+cov_mystocks_future
+```
+```{r echo=FALSE,cache=FALSE}
+# return in test data with optimal weights applied
+optimised_returns_future = sum(mean_return_future*optimal_weights)
+# risk in test data with optimal weights applied
+optimised_risk_future <- sqrt(t(optimal_weights) %*% (cov_mystocks_future %*% optimal_weights))
+# calculate portfolio score from returns and risk
+optimised_score_future <- optimised_returns_future / optimised_risk_future
+# create a matrix to compare train and test performance
+futuredata<-matrix(c(optimised_returns_GA,optimised_risk_GA,optimised_score,optimised_returns_future,optimised_risk_future,optimised_score_future),nrow=2,byrow=T)
+rownames(futuredata) <- c("Optimised Portfolio", "Portfolio on future data")
+colnames(futuredata) <- c("Returns", "Risk", "Score")
+# view the comparison in matrix
+futuredata
+```
+The risk on test data is lower than the train data which indicates the weights evolved from the GA is performing better on the on unseen data in terms of risk. 
+The returns on test data is significantly lower than train data. This might indicate the optimal weights performed well on training data and the model may be over fitting on train data. The weights are not generalizing for future data. The case is same with the portfolio score where train data is performing better than test data. The decrease in returns and score for test data could also be due to fluctuating market conditions for which the portfolio is sensitive to. 
+
+```{r include=FALSE}
+# Visual comparison Train vs Test 
+returns <- c(optimised_returns_GA, optimised_returns_future)
+risk <- c(optimised_risk_GA, optimised_risk_future)
+score <- c(optimised_score, optimised_score_future)
+# Plot for better visualization and comparison
+traintest_df_labels <- c("Optimal portfolio - Train", "Optimal portfolio - Test")
+traintest_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = traintest_df_labels)
+plot(1, type = "n", xlab = "Portfolio", ylab = "Values", main = "Train and Test Portfolio Comparison")
+plot_matrix <- matrix(c(optimised_returns_GA, optimised_risk_GA, optimised_score, optimised_returns_future, optimised_risk_future, optimised_score_future),
+                     nrow = 2, ncol = 3, byrow = TRUE)
+```
+```{r echo=FALSE,fig.width=5, fig.height=3, fig.align='center'}
+barplot(t(plot_matrix), beside = TRUE, col = c("blue", "red", "green"),
+        names.arg = traintest_df$Portfolio,
+        main = "Train and Test Portfolio Comparison",
+        ylab = "Values",xlab = "Returns,Risk,Score")
+```
+## Comparison of the evolved portfolio with balanced and random portfolios
+A balanced portfolio is created by assigning equal weights to all stocks. The performance of a balanced portfolio is compared to the train and test data of the optimal weighted portfolios.
+Similar comparison is made with a random weighted portfolio. To create a random portfolio, the weights are randomly assigned to the stocks and the average of several runs is taken for comparison.
+
+### Optimised vs Balanced Portfolio
+```{r echo=FALSE,cache=FALSE}
+# Use a balanced portfolio with equal weights. 
+balanced_weights <- rep(1/num_stocks, num_stocks)
+# returns with equal weights applied in train
+bportfolio_returns_train <- sum(meanreturn*balanced_weights)
+# risk with equal weights applied in train
+bportfolio_risk_train <- sqrt(t(balanced_weights) %*% (cov_mystocks %*% balanced_weights))
+# portfolio score of train calculated from returns and risk
+bportfolio_score_train <- bportfolio_returns_train / bportfolio_risk_train
+# returns with equal weights applied in test
+bportfolio_returns_test <- sum(mean_return_future*balanced_weights)
+# risk with equal weights applied in test
+bportfolio_risk_test <- sqrt(t(balanced_weights) %*% (cov_mystocks_future %*% balanced_weights))
+# portfolio score of test calculated from returns and risk
+bportfolio_score_test <- bportfolio_returns_test / bportfolio_risk_test
+#create matrix to compare optimal and balanced portfolios
+balanced_matrix<-matrix(c(bportfolio_returns_train,bportfolio_risk_train,bportfolio_score_train,optimised_returns_GA,optimised_risk_GA,optimised_score,bportfolio_returns_test,bportfolio_risk_test,bportfolio_score_test,optimised_returns_future,optimised_risk_future,optimised_score_future),nrow=4,byrow=T)
+# update row and column names of matrix
+rownames(balanced_matrix) <- c("Balanced weights Portfolio - Train","Optimal weight portfolio - Train","Balanced weights Portfolio - Test","Optimal weight portfolio - Test")
+colnames(balanced_matrix) <- c("Returns", "Risk", "Score")
+balanced_matrix
+```
+
+```{r echo=FALSE, fig.width=30, fig.height=10, fig.align='center',cache=FALSE}
+# Visual comparison Balanced vs Optimal
+# create vectors for returns,risk and score for optimal and balanced portfolios
+returns <- c(bportfolio_returns_train, optimised_returns_GA, bportfolio_returns_test, optimised_returns_future)
+risk <- c(bportfolio_risk_train, optimised_risk_GA, bportfolio_risk_test, optimised_risk_future)
+score <- c(bportfolio_score_train, optimised_score, bportfolio_score_test, optimised_score_future)
+# Plot for better visualization and comparison
+balanced_optimal_df_labels <- c("Bal-Train", "Opt-Train", "Bal-Test", "Opt-Test")
+
+balanced_optimal_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = balanced_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(balanced_optimal_df$Returns, names.arg = balanced_optimal_df$Portfolio, main = "Returns", col = c("red", "blue", "red","blue"),cex.main =4, cex.names = 3.5, cex.lab = 3.5)
+```
+The metrics for both Optimized and balance portfolio is compared. The optimal weighted portfolio is showing significantly better returns and higher risk than the balanced portfolio for both train and test data. The score is hence better for the optimal weighted portfolio in train data and a little lower than the test data. The optimal weighted portfolio outperformed the balanced portfolio in terms of returns and suggests that the weights derived from GA model is better than the balanced weights.
+
+### Optimised vs Random generated Portfolio
+```{r echo=FALSE,cache=FALSE}
+# Use a random portfolio with randomly generated weights.
+num_randoms = 20
+rportfolio_returns_train <- numeric(num_randoms)
+rportfolio_returns_test <- numeric(num_randoms)
+rportfolio_risk_train <- numeric(num_randoms)
+rportfolio_risk_test <- numeric(num_randoms)
+rportfolio_score_train <- numeric(num_randoms)
+rportfolio_score_test <- numeric(num_randoms)
+rweights <- numeric(num_randoms)
+mean_random_weights <- numeric(num_randoms)
+# run the loop 20 times to calculate returns,risk and score with random weights
+for (run in 1:num_randoms){
+  random_weights <- runif(num_stocks)
+  # Normalize weights to ensure the sum is 1
+  random_weights <- random_weights / sum(random_weights)
+  # for train
+  rportfolio_returns_train[run] <- sum(meanreturn*random_weights)
+  rportfolio_risk_train[run] <- sqrt(t(random_weights) %*% (cov_mystocks %*% random_weights))
+  rportfolio_score_train[run] <- rportfolio_returns_train[run] / rportfolio_risk_train[run]
+  # for test
+  rportfolio_returns_test[run] <- sum(mean_return_future*random_weights)
+  rportfolio_risk_test[run] <- sqrt(t(random_weights) %*% (cov_mystocks_future %*% random_weights))
+  rportfolio_score_test[run] <- rportfolio_returns_test[run] / rportfolio_risk_test[run]
+}
+# find the average for train
+rportfolio_returns_train_avg <- mean(rportfolio_returns_train)
+rportfolio_risk_train_avg <- mean(rportfolio_risk_train)
+rportfolio_score_train_avg <- mean(rportfolio_score_train)
+# find the average for test
+rportfolio_returns_test_avg <- mean(rportfolio_returns_test)
+rportfolio_risk_test_avg <- mean(rportfolio_risk_test)
+rportfolio_score_test_avg <- mean(rportfolio_score_test)
+# create a matrix to compare optimal and random portfolios
+random_matrix<-matrix(c(rportfolio_returns_train_avg,rportfolio_risk_train_avg,rportfolio_score_train_avg,optimised_returns_GA,optimised_risk_GA,optimised_score,rportfolio_returns_test_avg,rportfolio_risk_test_avg,rportfolio_score_test_avg,optimised_returns_future,optimised_risk_future,optimised_score_future),nrow=4,byrow=T)
+rownames(random_matrix) <- c("Random weights Portfolio - Train","Optimal weight portfolio - Train","Random weights Portfolio - Test","Optimal weight portfolio - Test")
+colnames(random_matrix) <- c("Returns", "Risk", "Score")
+random_matrix
+```
+The optimal portfolio has a higher and positive return when compared to the random portfolio on both train and test data. It also performs well with higher score than the random portfolio on train data. The risk associated with optimal portfolio is higher than the random portfolio for train and test data but the returns improved with optimal weights. This suggests that the weights we chose from GA model are giving better returns than randomly assigned weights for both the evolved and future data.
+
+```{r echo=FALSE,fig.width=16, fig.height=5, fig.align='center',cache=FALSE}
+# create vectors for return,risk and score for optimal and random portfolios
+returns <- c(rportfolio_returns_train_avg, optimised_returns_GA, rportfolio_returns_test_avg, optimised_returns_future)
+risk <- c(rportfolio_risk_train_avg, optimised_risk_GA, rportfolio_risk_test_avg, optimised_risk_future)
+score <- c(rportfolio_score_train_avg, optimised_score, rportfolio_score_test_avg, optimised_score_future)
+# Plot for better visualization and comparison
+random_optimal_df_labels <- c("Rand.Train", "Opt.Train", "Rand.Test", "Opt.Test")
+
+random_optimal_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = random_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(random_optimal_df$Returns, names.arg = random_optimal_df$Portfolio, main = "Returns", col = c("red", "blue", "red","blue"),cex.main =3, cex.names = 1.5, cex.lab = 1.5)
+```
+
+
+## Creation and evaluation of portfolios with differently balanced risk and return
+The fitness function and the GA model created will balance the risk and return evenly. The fitness function is modified to handle different preferences to risk or return.
+
+### Fitness function to create differently balanced portfolios
+In order to vary the balance between risk and returns, a bias is introduced to assign weights for both return and risk, the sum of which will be 1. Run the GA model with the new fitness function. Variable bias is the weight applied for return and (1-bias) is the weight applied for risk. If bias is set to 1, the function will try to maximize the return giving no preference to risk. Similarly, when bias is set to 0, it prioritize risk aversion without giving any preference to return. These are the extreme scenarios without balance. The value of bias can be varied to attain a trade off between these 2 objectives. 
+```{r echo=FALSE, results='hide',cache=FALSE}
+# new fitness function with bias for multi-objective
+evalMultiObjFunc <- function(weights) {  
+  weights <- weights / sum(weights)
+  sum_weights = sum(weights)
+  portfolio_returns <- sum(weights*meanreturn)
+  portfolio_risk <- sqrt(t(weights) %*% (cov_mystocks %*% weights))
+  # A weight is added to each objective
+  portfolio_score <- (bias * portfolio_returns) / ((1 - bias) * portfolio_risk)
+  if (abs(sum_weights - 1) > 1e-6) {
+    return(-Inf)
+  }
+  return(portfolio_score)
+}
+```
+### Bias of 0.85 which prioritizes portfolio return
+The bias is adjusted to give higher priority to increasing the returns. The GA model is executed with the updated fitness function. With the new evolved weights, a new portfolio is created. 
+```{r echo=FALSE, results='hide',cache=FALSE}
+# Consider bias of 0.85 which prioritizes portfolio return
+bias <- 0.85
+# run GA model
+GA_model_returnObj <- ga(type = "real-valued", fitness = evalMultiObjFunc, lower = GA_params$lower, upper = GA_params$upper, monitor = FALSE, popSize = GA_params$populationSize, maxiter = GA_params$maxiter, pcrossover = GA_params$pcrossover, pmutation = GA_params$pmutation)
+colnames(GA_model_returnObj@solution) <- myStocks
+GA_model_returnObj@solution
+returnObj_weights <- as.numeric(GA_model_returnObj@solution)
+returnObj_weights
+```
+### Optimal Portfolio vs Return maximising Portfolio
+```{r echo=FALSE, results='hide',cache=FALSE}
+# Risk and return for training data
+returnbias_returns = sum(meanreturn*returnObj_weights)
+print("Returns for the return preference weights of stocks in Train data :")
+returnbias_returns
+returnbias_risk <- sqrt(t(returnObj_weights) %*% (cov_mystocks %*% returnObj_weights))
+print("Risk factor for the return preference weights of stocks in Train data:")
+returnbias_risk
+returnbias_score <- returnbias_returns / returnbias_risk
+# Risk and return for testing data
+returnbias_returns_test = sum(mean_return_future*returnObj_weights)
+print("Returns for the return preference weights of stocks in Test data :")
+returnbias_returns_test
+returnbias_risk_test <- sqrt(t(returnObj_weights) %*% cov_mystocks_future %*% returnObj_weights)
+print("Risk factor for the return preference weights of stocks in Test data:")
+returnbias_risk_test
+returnbias_score_test <- returnbias_returns_test / returnbias_risk_test
+```
+```{r echo=FALSE,cache=FALSE}
+# create matrix to compare optimal portfolio with return biased portfolio
+return_bias_matrix<-matrix(c(optimised_returns_GA,optimised_risk_GA,optimised_score,returnbias_returns,returnbias_risk,returnbias_score,optimised_returns_future,optimised_risk_future,optimised_score_future,returnbias_returns_test,returnbias_risk_test,returnbias_score_test),nrow=4,byrow=T)
+rownames(return_bias_matrix) <- c("Optimal Portfolio Train","Return priority Portfolio Train", "Optimal Portfolio Test","Return priority Portfolio Test")
+colnames(return_bias_matrix) <- c("Returns", "Risk", "Score")
+return_bias_matrix
+```
+The new portfolio with return bias and the optimal portfolio without any bias, show very similar returns, risk and score with only slight variation. The same evolved weights are applied for the test data also from 2019. The observations are the same where both portfolios exhibit almost similar metrics on test data. The return biased portfolio is giving higher returns but with increased risk. The overall performance is higher for return biased portfolio in both train and test periods.
+When the preference is given for returns, the GA algorithm selects stocks with higher returns from the data. This may also lead to higher risk as the fitness function gives very low weight for aversing the risk.
+
+```{r include=FALSE}
+# create vectors fro returns,risk and score for optimal and return biased portfolios
+returns <- c(returnbias_returns, optimised_returns_GA, returnbias_returns_test, optimised_returns_future)
+risk <- c(returnbias_risk, optimised_risk_GA, returnbias_risk_test, optimised_risk_future)
+score <- c(returnbias_score, optimised_score, returnbias_score_test, optimised_score_future)
+# Plot for better visualization and comparison
+returnbias_optimal_df_labels <- c("Ret.Bias.Train", "Opt.Train", "Ret.Bias.Test", "Opt.Test")
+
+returnbias_optimal_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = returnbias_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(returnbias_optimal_df$Returns, names.arg = returnbias_optimal_df$Portfolio, main = "Returns", col = c("red", "blue", "red","blue"))
+```
+
+### Balanced & Random Portfolios vs Return maximising Portfolio
+```{r echo=FALSE,cache=FALSE}
+# Compare the returns of training/testing data with the new optimized weights, balanced and random weights.
+return_bias_bmatrix<-matrix(c(bportfolio_returns_train,bportfolio_risk_train,bportfolio_score_train,rportfolio_returns_train_avg,rportfolio_risk_train_avg,rportfolio_score_train_avg,returnbias_returns,returnbias_risk,returnbias_score,bportfolio_returns_test,bportfolio_risk_test,bportfolio_score_test,rportfolio_returns_test_avg,rportfolio_risk_test_avg,rportfolio_score_test_avg,returnbias_returns_test,returnbias_risk_test,returnbias_score_test),nrow=6,byrow=T)
+rownames(return_bias_bmatrix) <- c("Balanced Portfolio Train","Random Portfolio Train","Return priority Portfolio Train", "Balanced Portfolio Test","Random Portfolio Test","Return priority Portfolio Test")
+colnames(return_bias_bmatrix) <- c("Returns", "Risk", "Score")
+# print the matrix to compare
+return_bias_bmatrix
+```
+The bias 0.85 gives preference to returns and the portfolio is compared with the previously created balanced and random portfolios. The evolved portfolio which gives more preference to returns is shown to give much higher returns compared to the balanced or random portfolios. This observation is for both train and test data with respect to returns. At the same time, the risk seems to have increased for this portfolio compared to balanced or random weights. The score is higher for train but less compared to the other portfolios in test data. This performance is because of the model's priority on maximizing the returns without giving any weight to averse risk.
+
+```{r include=FALSE}
+returns <- c(bportfolio_returns_train, rportfolio_returns_train_avg, returnbias_returns, bportfolio_returns_test, rportfolio_returns_test_avg, returnbias_returns_test)
+# Plot for better visualization and comparison
+BalRand_optimal_df_labels <- c("Bal.Train","Rand.Train", "Ret.Train", "Bal.Test","Rand.test", "Ret.Test")
+
+BalRand_optimal_df <- data.frame(Returns = returns, Portfolio = BalRand_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(BalRand_optimal_df$Returns, names.arg = BalRand_optimal_df$Portfolio, main = "Returns", col = c("red","green", "blue", "red","green","blue"))
+```
+
+### Bias of 0.3 which prioritizes risk aversion
+The bias is adjusted to give priority to aversing the risk. The GA model is executed with the updated fitness function and with the new bias. With the new evolved weights, a new portfolio is created. 
+```{r echo=FALSE, results='hide',cache=FALSE}
+# Consider bias of 0.3 which prioritizes portfolio risk
+bias <- 0.3
+# run the GA model
+GA_model_riskObj <- ga(type = "real-valued", fitness = evalMultiObjFunc, lower = GA_params$lower, upper = GA_params$upper, monitor = FALSE, popSize = GA_params$populationSize, maxiter = GA_params$maxiter, pcrossover = GA_params$pcrossover, pmutation = GA_params$pmutation)
+colnames(GA_model_riskObj@solution) <- myStocks
+GA_model_riskObj@solution
+riskObj_weights <- as.numeric(GA_model_riskObj@solution)
+riskObj_weights
+```
+```{r echo=FALSE, results='hide',cache=FALSE}
+# Risk and return for training data
+riskbias_returns = sum(meanreturn*riskObj_weights)
+print("Returns for the risk priority weights of stocks in Train data :")
+riskbias_returns
+riskbias_risk <- sqrt(t(riskObj_weights) %*% (cov_mystocks %*% riskObj_weights))
+print("Risk factor for the risk priority weights weights of stocks in Train data:")
+riskbias_risk
+riskbias_score <- riskbias_returns / riskbias_risk
+# Risk and return for testing data
+riskbias_returns_test = sum(mean_return_future*riskObj_weights)
+print("Returns for the risk priority weights weights of stocks in Test data :")
+riskbias_returns_test
+riskbias_risk_test <- sqrt(t(riskObj_weights) %*% cov_mystocks_future %*% riskObj_weights)
+print("Risk factor for the optimal weights of stocks in Test data:")
+riskbias_risk_test
+riskbias_score_test <- riskbias_returns_test / riskbias_risk_test
+riskbias_score_test
+```
+### Optimal Portfolio vs Risk aversion Portfolio
+```{r echo=FALSE,cache=FALSE}
+# create a matrix to compare optimal and risk biased portfolios
+risk_bias_matrix<-matrix(c(optimised_returns_GA,optimised_risk_GA,optimised_score,riskbias_returns,riskbias_risk,riskbias_score,optimised_returns_future,optimised_risk_future,optimised_score_future,riskbias_returns_test,riskbias_risk_test,riskbias_score_test),nrow=4,byrow=T)
+rownames(risk_bias_matrix) <- c("Optimal Portfolio Train","Risk priority Portfolio Train", "Optimal Portfolio Test","Risk priority Portfolio Test")
+colnames(risk_bias_matrix) <- c("Returns", "Risk", "Score")
+risk_bias_matrix
+```
+The mean returns for both train and test data have slightly varied from the initial returns as this portfolio is giving more preference to minimize the risk. 
+The new portfolio with risk aversion bias, shows a slight change in risk value for both train and test data. The score however, is comparatively equal to the respective original portfolio for train and test periods.
+When the preference is given for risk aversion, the GA algorithm selects stocks with lower risks. This may also lead to lesser returns.
+
+```{r include=FALSE}
+# create vectors for returns,risk and score
+returns <- c(riskbias_returns, optimised_returns_GA, riskbias_returns_test, optimised_returns_future)
+risk <- c(riskbias_risk, optimised_risk_GA, riskbias_risk_test, optimised_risk_future)
+score <- c(riskbias_score, optimised_score, riskbias_score_test, optimised_score_future)
+# Plot for better visualization and comparison
+riskbias_optimal_df_labels <- c("Risk.Bias.Train", "Opt.Train", "Risk.Bias.Test", "Opt.Test")
+
+riskbias_optimal_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = riskbias_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(riskbias_optimal_df$Returns, names.arg = riskbias_optimal_df$Portfolio, main = "Returns", col = c("red", "blue", "red","blue"))
+```
+```{r include=FALSE}
+# matrix to compare portfolios with different bias
+overall_bias_matrix<-matrix(c(returnbias_returns,returnbias_risk,returnbias_score,riskbias_returns,riskbias_risk,riskbias_score,returnbias_returns_test,returnbias_risk_test,returnbias_score_test,riskbias_returns_test,riskbias_risk_test,riskbias_score_test),nrow=4,byrow=T)
+rownames(overall_bias_matrix) <- c("Return Maximise Portfolio Train","Risk Avert Portfolio Train", "Return Maximise Portfolio Test","Risk Avert Portfolio Test")
+colnames(overall_bias_matrix) <- c("Returns", "Risk", "Score")
+overall_bias_matrix
+```
+
+### Balanced/Random Portfolios vs Risk aversion Portfolio
+```{r echo=FALSE,cache=FALSE}
+# Compare the returns of training/testing data with the new optimized weights, balanced and random weights.
+risk_bias_bmatrix<-matrix(c(bportfolio_returns_train,bportfolio_risk_train,bportfolio_score_train,rportfolio_returns_train_avg,rportfolio_risk_train_avg,rportfolio_score_train_avg,riskbias_returns,riskbias_risk,riskbias_score,bportfolio_returns_test,bportfolio_risk_test,bportfolio_score_test,rportfolio_returns_test_avg,rportfolio_risk_test_avg,rportfolio_score_test_avg,riskbias_returns_test,riskbias_risk_test,riskbias_score_test),nrow=6,byrow=T)
+rownames(risk_bias_bmatrix) <- c("Balanced Portfolio Train","Random Portfolio Train","Risk priority Portfolio Train", "Balanced Portfolio Test","Random Portfolio Test","Risk priority Portfolio Test")
+colnames(risk_bias_bmatrix) <- c("Returns", "Risk", "Score")
+risk_bias_bmatrix
+```
+The bias 0.3 gives preference to risk aversion and the portfolio is compared with the previously created balanced and random portfolios. The evolved portfolio which gives preference to risk, is showing higher returns but with increased risk too, compared to the balanced and random portfolios for both train and test periods. The performance in terms of score has increased for train data but this is got reduced for test data.
+
+```{r include=FALSE}
+# create vector for returns
+returns <- c(bportfolio_returns_train, rportfolio_returns_train_avg, riskbias_returns, bportfolio_returns_test, rportfolio_returns_test_avg, riskbias_returns_test)
+# Plot for better visualization and comparison
+BalRandRisk_optimal_df_labels <- c("Bal.Train","Rand.Train", "Risk.Train", "Bal.Test","Rand.test", "Risk.Test")
+
+BalRandRisk_optimal_df <- data.frame(Returns = returns, Portfolio = BalRandRisk_optimal_df_labels)
+
+# Plot
+par(mfrow = c(1, 3), mar = c(4, 4, 2, 1))
+barplot(BalRandRisk_optimal_df$Returns, names.arg = BalRandRisk_optimal_df$Portfolio, main = "Returns", col = c("red","green", "blue", "red","green","blue"))
+```
+
+#                                    PART 2
+#                       USING GAs TO SELECT THE ASSETS
+In this part, I got a pool of 50 stocks to choose from. Using GA model, 10 stocks are selected which maximizes returns and minimizes score. 
+This top 10 stocks are given to the first GA model created for optimizing the weights. The optimal weights are assigned to the stocks selected by GA. The returns, risk and score of these new stocks are compared with the performance of the 10 stocks chosen manually in Part 1.
+
+## Selection of Assets
+The 50 assets are chosen from year 2018. This includes the stocks which performed well for the year.
+A GA model is created to identify the top 10 best performing stocks from this pool. The final stock selection suggested by the algorithm is as follows:
+
+```{r warning=FALSE,echo=FALSE, results='hide',cache=FALSE}
+# create a pool of 50 stock symbols
+stocks_pool <- c("NTAP","AMD","TRIP","CMG","NFLX","UA","AMZN","BSX","FTNT","ORLY",
+                 "VOD","ABBV","ILMN","ACST","ADBE","ALX","AMEH","AMN","AMPH","PFE",
+                 "M","ALGN","KSS","ADBE","MU","IDXX","RL","STX","FFIV","CRM","NVDA",
+                "ISRG","EVR","AZN","GSK","FOSL","MCD","GOOG","DIS","KO","JPM",
+                 "MELI","SBUX","WMT","VOO","PRTS","ACMR","PERI","AAPL","TSLA")
+# check the number of stocks in pool
+length(stocks_pool)
+# Function to get daily returns for a list of stocks for year 2018
+getDailyReturns <- function(stockSymbols) {
+  getSymbols(stockSymbols, src = "yahoo", from = "2018-01-01", to="2018-12-31")
+  returns <- do.call(merge, lapply(stockSymbols, function(sym) dailyReturn(Cl(get(sym)))))
+  colnames(returns) <- stockSymbols
+  return(returns)
+}
+set.seed(42)
+# Get daily returns for the pool of stocks
+dailyReturns_pool <- getDailyReturns(stocks_pool)
+head(dailyReturns_pool,10)
+cov_mystocks_pool <- cov(dailyReturns_pool)
+# Fitness function for GA to select the stocks
+stock_selection <- function(weights_pool) {
+  weights_pool <- weights_pool / sum(weights_pool)
+  sum_weights_ppol = sum(weights_pool)
+  portfolio_returns <- colSums(dailyReturns_pool * weights_pool)
+  portfolio_risk <- sqrt(t(weights_pool) %*% (cov_mystocks_pool %*% weights_pool))
+  portfolio_score <- portfolio_returns / portfolio_risk
+   if (abs(sum_weights_ppol - 1) > 1e-6) {
+    return(-Inf)
+  }
+  return(portfolio_score)
+}
+# Define parameters for the second GA
+GA_params_stockselection <- list(
+  populationSize = 50,
+  maxiter = 100,
+  pcrossover = 0.8,
+  pmutation = 0.1,
+  elitism = 2
+)
+# Genetic Algorithm
+GA_stockselection <- ga(type = "real-valued",
+               fitness = stock_selection,
+               lower = rep(0, length(stocks_pool)),
+               upper = rep(1, length(stocks_pool)),
+               maxiter = GA_params_stockselection$maxiter,
+               popSize = GA_params_stockselection$populationSize,
+               pcrossover = GA_params_stockselection$pcrossover,
+               pmutation = GA_params_stockselection$pmutation,
+               elitism = GA_params_stockselection$elitism,
+               monitor = FALSE)
+
+```
+```{r echo=FALSE,cache=FALSE}
+# Get the best weights
+if (length(GA_stockselection@solution) > 0) {
+  best_weights <- GA_stockselection@solution[1:min(10, nrow(GA_stockselection@solution)), ]
+  top_10_stocks <- stocks_pool[order(-best_weights, decreasing = TRUE)[1:10]]
+  cat("Top 10 Stocks:", top_10_stocks, "\n")
+} else {
+  cat("No feasible solution found.\n")
+}
+```
+## Performance of stocks selected by GA
+The top 10 stocks selected by GA are given as inputs for the initial GA where we optimized the weights for 10 stocks. After getting the optimal weights as feedback from optimization GA for the new stocks, the performance with these stocks are calculated.
+```{r include=FALSE,cache=FALSE}
+# Get the daily returns for the top 10 stocks chosen by GA
+dailyreturns_top <- getDailyReturns(top_10_stocks)
+# meanreturn using apply function
+meanreturn <- apply(dailyreturns_top,2,mean)
+meanreturn
+# covariance of assets
+cov_mystocks = cov(dailyreturns_top)
+
+# Run the GA model to optimize the weights for the selected stocks
+GA_model_top10 <- ga(type = "real-valued", fitness = evalFunc, lower = GA_params$lower, upper = GA_params$upper, monitor = FALSE, popSize = GA_params$populationSize, maxiter = GA_params$maxiter, pcrossover = GA_params$pcrossover, pmutation = GA_params$pmutation)
+# replace column name with stock symbols
+colnames(GA_model_top10@solution) <- top_10_stocks
+GA_model_top10@solution
+weights_selectedStocks <- as.numeric(GA_model_top10@solution)
+```
+```{r warning=FALSE,echo=FALSE}
+# plot the new model
+plot(GA_model_top10)
+```
+```{r echo=FALSE, results='hide',cache=FALSE}
+# The weights from GA is applied to the top 10 stocks and the returns is calculated for the portfolio
+meanreturn_selectedStocks <- apply(dailyreturns_top,2,mean)
+cov_selectedStocks = cov(dailyreturns_top)
+returns_GAselectedstocks <- sum(meanreturn_selectedStocks*weights_selectedStocks)
+risk_GAselectedstocks <- sqrt(t(weights_selectedStocks) %*% (cov_selectedStocks %*% weights_selectedStocks))
+# find score from returns and risk
+score_GAselectedstocks <- returns_GAselectedstocks / risk_GAselectedstocks
+# create dataframe with metrics
+selectedStocks_df <- data.frame(
+  Returns = returns_GAselectedstocks,
+  Risk = risk_GAselectedstocks,
+  PortfolioScore = score_GAselectedstocks)
+selectedStocks_df
+```
+## Comparison of GA selected portfolio against other portfolios
+The optimal weights derived from GA for the GA selected stocks is applied to the respective stocks to calculate the performance metrics. This is compared with the stocks manually chosen. The comparison is done for original weights, balanced and random weights on train and test data.
+
+### Train data - Manual selection vs GA selection
+The returns for GA stocks seems to be much less than the returns compared to manual stocks. However, the risk associated with GA stocks are much less. The manual stocks give a higher score too despite the higher risk associated. From this, I assume the manually selected stocks are better suited to build the portfolio.
+The table below shows the comparison.
+```{r echo=FALSE,cache=FALSE}
+# create matrix to compare manual and GA stocks
+comparison_df<-matrix(c(optimised_returns_GA,optimised_risk_GA,optimised_score,returns_GAselectedstocks,risk_GAselectedstocks,score_GAselectedstocks),nrow=2,byrow=T)
+rownames(comparison_df) <- c("Optimised Portfolio - Manual selected stocks", "Optimised Portfolio - GA selected stocks")
+colnames(comparison_df) <- c("Returns", "Risk", "Score")
+comparison_df
+```
+The metrics is plotted in bar chart for a better visual representation.
+```{r include=FALSE,cache=FALSE}
+# Visual comparison Manually chosen and GA selected stocks 
+returns <- c(optimised_returns_GA, returns_GAselectedstocks)
+risk <- c(optimised_risk_GA, risk_GAselectedstocks)
+score <- c(optimised_score, score_GAselectedstocks)
+# Plot for better visualization and comparison
+manual_GA_df_labels <- c("Manually selected stocks", "GA selected stocks")
+manual_GA_df <- data.frame(Returns = returns, Risk = risk, Score = score, Portfolio = manual_GA_df_labels)
+plot(1, type = "n", xlab = "Portfolio", ylab = "Values", main = "Manual vs GA selection Portfolio Comparison - Train")
+plot_matrix <- matrix(c(optimised_returns_GA, optimised_risk_GA, optimised_score, returns_GAselectedstocks, risk_GAselectedstocks, score_GAselectedstocks),
+                     nrow = 2, ncol = 3, byrow = TRUE)
+
+```
+```{r echo=FALSE,fig.width=5, fig.height=4, fig.align='center'}
+barplot(t(plot_matrix), beside = TRUE, col = c("blue", "red", "green"),
+        names.arg = manual_GA_df$Portfolio,
+        main = "Manual vs GA selection - Train",
+        ylab = "Values",xlab = "Returns,Risk,Score")
+
+```
+### Test data - Manual selection vs GA selection
+The daily returns or the final selected stocks are retrieved for the test year of 2019. The metrics is then compared with the optimized portfolio with manual stocks with test data.
+```{r echo=FALSE,results='hide',cache=FALSE}
+# # Function to get daily returns for a list of stocks for year 2019
+getDailyReturnsTest <- function(stockSymbols) {
+  getSymbols(stockSymbols, src = "yahoo", from = "2019-01-01", to="2019-12-31")
+  returns <- do.call(merge, lapply(stockSymbols, function(sym) dailyReturn(Cl(get(sym)))))
+  colnames(returns) <- stockSymbols
+  return(returns)
+}
+set.seed(42)
+# Get daily returns for the selected stocks from 2019 test data
+dailyreturns_GATest <- getDailyReturnsTest(top_10_stocks)
+meanreturn_GATest <- apply(dailyreturns_GATest,2,mean)
+meanreturn_GATest
+cov_GATest = cov(dailyreturns_GATest)
+optimised_returns_GATest = sum(meanreturn_GATest*weights_selectedStocks)
+optimised_risk_GATest <- sqrt(t(weights_selectedStocks) %*% (cov_GATest %*% weights_selectedStocks))
+# find score from returns and risk of test data
+optimised_score_GATest <- optimised_returns_GATest / optimised_risk_GATest
+```
+```{r echo=FALSE,cache=FALSE}
+# create matrix to compare manual and GA selection of stocks in test data
+data_GATest<-matrix(c(optimised_returns_GATest,optimised_risk_GATest,optimised_score_GATest,optimised_returns_future,optimised_risk_future,optimised_score_future),nrow=2,byrow=T)
+rownames(data_GATest) <- c("GA selection - Test", "Manual selection - Test")
+colnames(data_GATest) <- c("Returns", "Risk", "Score")
+data_GATest
+```
+The returns is higher for the stocks selected manually than the final selected stocks when run in test data. The risk for manual stocks is higher in the year 2019. The stocks selected manually perform better for the test data than the GA selected stocks in terms of overall score.
+
+### Balanced Portfolio - Manual selection vs GA selection
+The metrics for balanced portfolio with manual selection was already calculated. Here, I calculate the metrics for the GA selected stocks by assigning balanced weights to them. 
+
+```{r echo=FALSE,cache=FALSE}
+# calculate metrics for balanced weights in GA selected stocks in train
+bportfolio_GAreturns_train <- sum(meanreturn_selectedStocks*balanced_weights)
+bportfolio_GArisk_train <- sqrt(t(balanced_weights) %*% (cov_selectedStocks %*% balanced_weights))
+bportfolio_GAscore_train <- bportfolio_GAreturns_train / bportfolio_GArisk_train
+# calculate metrics for balanced weights in GA selected stocks in test
+bportfolio_GAreturns_test <- sum(meanreturn_GATest*balanced_weights)
+bportfolio_GArisk_test <- sqrt(t(balanced_weights) %*% (cov_GATest %*% balanced_weights))
+bportfolio_GAscore_test <- bportfolio_GAreturns_test / bportfolio_GArisk_test
+# create matrix to compare balance portfolios
+balanced_data<-matrix(c(bportfolio_GAreturns_train,bportfolio_GArisk_train,bportfolio_GAscore_train,bportfolio_returns_train,bportfolio_risk_train,bportfolio_score_train,bportfolio_GAreturns_test,bportfolio_GArisk_test,bportfolio_GAscore_test,bportfolio_returns_test,bportfolio_risk_test,bportfolio_score_test),nrow=4,byrow=T)
+rownames(balanced_data) <- c("Balanced weights GA portfolio - Train","Balanced weights Manual portfolio - Train","Balanced weights GA Portfolio - Test","Balanced weights Manual Portfolio - Test")
+colnames(balanced_data) <- c("Returns", "Risk", "Score")
+balanced_data
+```
+When weights are applied equally, manually selected stocks seem to give higher returns and better score for train data than the GA selected stocks. For test data, the GA selected stocks are giving better returns and higher score. The risk is higher for manual stocks in both train and test periods. In terms of score, manual selection is better in train data and GA selection is better is test data.
+
+### Random Portfolio - Manual selection vs GA selection
+```{r echo=FALSE,cache=FALSE}
+# Use a random portfolio with randomly generated weights.
+rportfolio_GAreturns_train <- numeric(num_randoms)
+rportfolio_GAreturns_test <- numeric(num_randoms)
+rportfolio_GArisk_train <- numeric(num_randoms)
+rportfolio_GArisk_test <- numeric(num_randoms)
+rportfolio_GAscore_train <- numeric(num_randoms)
+rportfolio_GAscore_test <- numeric(num_randoms)
+rweights <- numeric(num_randoms)
+mean_random_weights <- numeric(num_randoms)
+# find the metrics from the average of 20 runs
+for (run in 1:num_randoms){
+  random_weights <- runif(num_stocks)
+  # Normalize weights to ensure the sum is 1
+  random_weights <- random_weights / sum(random_weights)
+  rportfolio_GAreturns_train[run] <- sum(meanreturn_selectedStocks*random_weights)
+  rportfolio_GArisk_train[run] <- sqrt(t(random_weights) %*% (cov_selectedStocks %*% random_weights))
+  rportfolio_GAscore_train[run] <- rportfolio_GAreturns_train[run] / rportfolio_GArisk_train[run]
+  rportfolio_GAreturns_test[run] <- sum(meanreturn_GATest*random_weights)
+  rportfolio_GArisk_test[run] <- sqrt(t(random_weights) %*% (cov_GATest %*% random_weights))
+  rportfolio_GAscore_test[run] <- rportfolio_GAreturns_test[run] / rportfolio_GArisk_test[run]
+}
+# calculate metrics for random weights in GA selected stocks in train
+rportfolio_GAreturns_train_avg <- mean(rportfolio_GAreturns_train)
+rportfolio_GArisk_train_avg <- mean(rportfolio_GArisk_train)
+rportfolio_GAscore_train_avg <- mean(rportfolio_GAscore_train)
+# calculate metrics for random weights in GA selected stocks in test
+rportfolio_GAreturns_test_avg <- mean(rportfolio_GAreturns_test)
+rportfolio_GArisk_test_avg <- mean(rportfolio_GArisk_test)
+rportfolio_GAscore_test_avg <- mean(rportfolio_GAscore_test)
+# create matrix to compare random weigthed portfolios
+random_data<-matrix(c(rportfolio_GAreturns_train_avg,rportfolio_GArisk_train_avg,rportfolio_GAscore_train_avg,rportfolio_returns_train_avg,rportfolio_risk_train_avg,rportfolio_score_train_avg,rportfolio_GAreturns_test_avg,bportfolio_GArisk_test,bportfolio_GAscore_test,bportfolio_returns_test,rportfolio_GArisk_test_avg,rportfolio_GAscore_test_avg),nrow=4,byrow=T)
+rownames(random_data) <- c("Random weights GA portfolio - Train","Random weights Manual portfolio - Train","Random weights GA Portfolio - Test","Random weights Manual Portfolio - Test")
+colnames(random_data) <- c("Returns", "Risk", "Score")
+random_data
+```
+The randomly assigned weighted portfolio is performing well with the manually selected stocks compared to GA selected stocks in both train and test data. There is no major variation in terms of risk. Manual stocks outperform GA stocks in Train data but almost same performance in Test data.
+
+# Conclusion
+In this document, I have manually selected 10 stocks for the year 2018 and derived a GA model to find the optimal weights for these stocks. The evaluation of portfolio is done of future unseen data of the year 2019. Overall, the the weights evolved give better performance for train data. 
+A comparison is also done with the balanced and random weights. The observation shows GA weighted portfolio performs better than the other weighted models.
+A multiobjective GA was constructed and the performance is compared with train and test data for all scenarios. In the final section, I have used GA to select the stocks rather than choosing manually. The performance of these stocks are compared against the manually selected stocks and the observations are noted. The overall report offers a thorough exploration of the portfolio construction and evaluation process using Genetic Algorithms.
+## **********************************************************************************************
